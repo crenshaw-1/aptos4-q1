@@ -1,5 +1,5 @@
 // TODO# 1: Define Module and Marketplace Address
-address 0x8a7bb6820951395ea0a351ff4ba8c551daf013f652e0791a7b60b67f71ced7b6 {
+address 0x2173a45c40df5848c9926c7278f134798c583cad9e1e9978f9a890ce5cbc70a7 {
 
     module NFTMarketplace {
         use 0x1::signer;
@@ -332,13 +332,19 @@ address 0x8a7bb6820951395ea0a351ff4ba8c551daf013f652e0791a7b60b67f71ced7b6 {
         public fun get_active_auctions(marketplace_addr: address): vector<Auction> acquires Marketplace {
             let marketplace = borrow_global<Marketplace>(marketplace_addr);
             let active_auctions = vector::empty<Auction>();
+            let current_time = timestamp::now_seconds();
             
             let i = 0;
             let len = vector::length(&marketplace.auctions);
             
             while (i < len) {
                 let auction = vector::borrow(&marketplace.auctions, i);
-                if (auction.active && auction.end_time > timestamp::now_seconds()) {
+                let nft = vector::borrow(&marketplace.nfts, auction.nft_id);
+                
+                // Triple verification: auction active, not expired, and NFT in auction state
+                if (auction.active && 
+                    auction.end_time > current_time && 
+                    nft.in_auction) {
                     vector::push_back(&mut active_auctions, *auction);
                 };
                 i = i + 1;
@@ -347,34 +353,39 @@ address 0x8a7bb6820951395ea0a351ff4ba8c551daf013f652e0791a7b60b67f71ced7b6 {
             active_auctions
         }
 
+
+
         public entry fun stop_auction(
             account: &signer,
             marketplace_addr: address,
             auction_id: u64
         ) acquires Marketplace {
             let marketplace = borrow_global_mut<Marketplace>(marketplace_addr);
+            
+            // Verify auction exists
+            assert!(auction_id < vector::length(&marketplace.auctions), 1200);
+            
             let auction = vector::borrow_mut(&mut marketplace.auctions, auction_id);
+            let nft = vector::borrow_mut(&mut marketplace.nfts, auction.nft_id);
             
-            // Verify the caller is the auction seller
-            assert!(auction.seller == signer::address_of(account), 1200);
-            assert!(auction.active, 1201);
+            // Only verify seller ownership
+            assert!(auction.seller == signer::address_of(account), 1201);
             
-            // If there was a bid, transfer the funds to the seller
+            // Return funds to highest bidder if there was a bid
             if (auction.current_bid > 0) {
                 coin::transfer<aptos_coin::AptosCoin>(
                     account,
-                    auction.seller,
+                    auction.highest_bidder,
                     auction.current_bid
                 );
             };
             
-            // Mark auction as inactive
+            // Reset auction and NFT states
             auction.active = false;
-            
-            // Update the NFT status
-            let nft = vector::borrow_mut(&mut marketplace.nfts, auction.nft_id);
-            nft.for_sale = false;
+            auction.current_bid = 0;
+            auction.highest_bidder = @0x0;
             nft.in_auction = false;
+            nft.for_sale = false;
         }
 
         public entry fun transfer_nft(
